@@ -1,0 +1,53 @@
+name: release
+
+# Build the plugin for every supported platform on a version tag,
+# package each in the layout clawpatrol expects
+# (<repo>_<version>_<os>_<arch>.tar.gz + a SHA256SUMS file), attach a
+# build-provenance attestation, and publish a GitHub release.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the release
+  id-token: write # keyless signing for the attestation
+  attestations: write # record the build-provenance attestation
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      REPO: clawpatrol-test-plugin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: build and package
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for pl in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+            os="${pl%_*}"; arch="${pl#*_}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -ldflags "-s -w" -trimpath -o "$REPO" .
+            tar -C . -czf "dist/${REPO}_${VER}_${pl}.tar.gz" "$REPO"
+            rm "$REPO"
+          done
+          ( cd dist && shasum -a 256 *.tar.gz > "${REPO}_${VER}_SHA256SUMS" )
+          ls -l dist
+
+      - name: attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/*.tar.gz'
+
+      - name: publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
